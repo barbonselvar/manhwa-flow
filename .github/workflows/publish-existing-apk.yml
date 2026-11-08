@@ -1,0 +1,42 @@
+name: Publish existing Android test APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish-prebuilt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APK_TRANSPORT: '{"repository":"barbonselvar/manhwa-flow","tag":"v0.1.0-android-test","name":"ManhwaFlow-debug.apk","size":203808490,"sha256":"fb4cbeeaae6013fb9f6ca10300d4f5b277b43b9f870c2332f3354e4da255c9cb","parts":[{"index":0,"size":8388608,"sha":"4034fc6e4c2934b72395db1a11ce2b70838727dd"},{"index":1,"size":8388608,"sha":"7449e0200a10d0b337ee701c4bc2d02bade20c72"},{"index":2,"size":8388608,"sha":"a17e2df89caac71d47d0ec0cc83778f562323465"},{"index":3,"size":8388608,"sha":"78161520fe83934430e368da4f0d1d7493485f08"},{"index":4,"size":8388608,"sha":"5c52ca42916af063de2ec5c52c80050b0a6da89f"},{"index":5,"size":8388608,"sha":"ca5a4df40118ed40310337be04f5087833f443d9"},{"index":6,"size":8388608,"sha":"bd93cc8db1ccb5e56577d5737561ac68bc8c741b"},{"index":7,"size":8388608,"sha":"e19124ca1dea070e476a0ce2ca406d1a29010971"},{"index":8,"size":8388608,"sha":"e694f22c88790966c8264640fb1852659d68a063"},{"index":9,"size":8388608,"sha":"ee4fc8c81048fe116a16b50b91df55e77501fd96"},{"index":10,"size":8388608,"sha":"1eb9b69a2954902078ee28530e33b52fe6e211da"},{"index":11,"size":8388608,"sha":"87571ab85acdfac7440e1167771332b8eb70842c"},{"index":12,"size":8388608,"sha":"132cd164c5eb8aec164d272c7af0f6337784d2d6"},{"index":13,"size":8388608,"sha":"e0f34d1a38cd9fd3faf09c3da0e7f337c56c331b"},{"index":14,"size":8388608,"sha":"59c5f587c65df597003322bd9e06049ddc118798"},{"index":15,"size":8388608,"sha":"64b53494d79544411fb9f3595665d2248fb34b70"},{"index":16,"size":8388608,"sha":"27beaf67b3f0a4bd5df5634b11602cdbf0faa9e5"},{"index":17,"size":8388608,"sha":"38fdddab0520a296539d97940b3aaa282fb776ae"},{"index":18,"size":8388608,"sha":"7188e59f97ac7605f4a75a794ba718ca2276bbf4"},{"index":19,"size":8388608,"sha":"eb837e813b42e9d25009e422c6aa9d4e36d9cb2a"},{"index":20,"size":8388608,"sha":"35b955e8253bbc9264a6173141db249e65d93dee"},{"index":21,"size":8388608,"sha":"dc0da53b93dd93fe66feea4b8882148e01fca2df"},{"index":22,"size":8388608,"sha":"62f367f3224b70660f92a74c78b87ba7f12145d9"},{"index":23,"size":8388608,"sha":"65844ef717517b05bdc99f0d6e1b43134a1bc63b"},{"index":24,"size":2481898,"sha":"f9cd12b88ab74b74c85d59bac19dae106ca570f9"}]}'
+    steps:
+      - name: Retrieve and verify the existing APK without rebuilding
+        shell: python
+        run: |
+          import base64, hashlib, json, os, urllib.request
+          from pathlib import Path
+          m=json.loads(os.environ["APK_TRANSPORT"])
+          assert m["repository"]==os.environ["GITHUB_REPOSITORY"]
+          assert [part["index"] for part in m["parts"]]==list(range(len(m["parts"])))
+          output=Path("ManhwaFlow-debug.apk")
+          h=hashlib.sha256()
+          with output.open("wb") as target:
+              for part in m["parts"]:
+                  url="https://api.github.com/repos/"+m["repository"]+"/git/blobs/"+part["sha"]
+                  request=urllib.request.Request(url,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28"})
+                  with urllib.request.urlopen(request,timeout=90) as response:
+                      record=json.load(response)
+                  data=base64.b64decode(record["content"])
+                  assert len(data)==part["size"]
+                  assert hashlib.sha1(b"blob "+str(len(data)).encode()+b"\0"+data).hexdigest()==part["sha"]
+                  target.write(data)
+                  h.update(data)
+                  print("Received verified part",part["index"]+1,"of",len(m["parts"]))
+          assert output.stat().st_size==m["size"]
+          assert h.hexdigest()==m["sha256"],"APK checksum mismatch: refuse to publish"
+          Path("ManhwaFlow-debug.apk.sha256").write_text(h.hexdigest()+"  ManhwaFlow-debug.apk\n")
+          print("Original APK verified:",output.stat().st_size,"bytes; SHA-256",h.hexdigest())
+      - name: Upload verified APK and checksum to the prerelease draft
+        shell: bash
+        run: gh release upload v0.1.0-android-test ManhwaFlow-debug.apk ManhwaFlow-debug.apk.sha256 --repo "$GITHUB_REPOSITORY"
